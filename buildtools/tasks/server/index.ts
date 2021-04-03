@@ -13,13 +13,7 @@ import { ForgeProfile } from "../../types/forgeProfile";
 import { FileDef } from "../../types/fileDef";
 import { fetchFileInfo } from "../../util/curseForgeAPI";
 import { downloadOrRetrieveFileDef, libraryToPath, RetrievedFileDefReason } from "../../util/util";
-import {
-	modpackManifest,
-	overridesFolder,
-	serverDestDirectory,
-	sharedDestDirectory,
-	tempDirectory,
-} from "../../globals";
+import { modpackManifest, overridesFolder, serverDestDirectory, sharedDestDirectory } from "../../globals";
 import del from "del";
 
 const MOJANG_MAVEN = "https://libraries.minecraft.net/";
@@ -66,7 +60,7 @@ async function downloadForge() {
 	 */
 	const forgeMavenLibrary = `net.minecraftforge:forge:${minecraft.version}-${parsedForgeEntry[1]}`;
 	const forgeInstallerPath = libraryToPath(forgeMavenLibrary) + "-installer.jar";
-	const localForgePath = upath.join(tempDirectory, upath.basename(forgeInstallerPath));
+	const forgeUniversalPath = upath.basename(libraryToPath(forgeMavenLibrary) + "-universal.jar");
 
 	/**
 	 * Fetch the Forge installer
@@ -76,42 +70,47 @@ async function downloadForge() {
 			url: FORGE_MAVEN + forgeInstallerPath,
 		})
 	).contents;
-	await fs.writeFileSync(localForgePath, forgeJar);
-
-	/**
-	 * Extract the installer into temp folder.
-	 */
-	log("Extracting the Forge installer...");
-
-	await new Promise((resolve) => {
-		fs.createReadStream(localForgePath)
-			.pipe(unzip.Extract({ path: upath.join(tempDirectory, "forge") }))
-			.on("close", resolve);
-	});
 
 	/**
 	 * Parse the profile manifest.
 	 */
-	log("Reading the manifest file...");
+	let forgeUniversalJar: Buffer, forgeProfile: ForgeProfile;
+	const files = (await unzip.Open.buffer(forgeJar))?.files;
 
-	const forgeProfile: ForgeProfile = JSON.parse(
-		fs.readFileSync(upath.join(tempDirectory, "forge", "install_profile.json")).toString(),
-	);
+	log("Extracting Forge installation profile & jar...");
 
-	if (!(forgeProfile && forgeProfile.versionInfo && forgeProfile.versionInfo.libraries)) {
-		throw new Error("Malformed Forge manifest file.");
+	if (!files) {
+		throw new Error("Malformed Forge installation jar.");
 	}
 
-	const forgeUniversalPath = upath.basename(libraryToPath(forgeMavenLibrary) + "-universal.jar");
+	for (const file of files) {
+		// Look for the universal jar.
+		if (!forgeUniversalJar && file.path == forgeUniversalPath) {
+			forgeUniversalJar = await file.buffer();
+		}
+		// Look for the installation profile.
+		else if (!forgeProfile && file.path == "install_profile.json") {
+			forgeProfile = JSON.parse((await file.buffer()).toString());
+		}
+
+		if (forgeUniversalJar && forgeProfile) {
+			break;
+		}
+	}
+
+	if (!(forgeProfile && forgeProfile.versionInfo && forgeProfile.versionInfo.libraries)) {
+		throw new Error("Malformed Forge installation profile.");
+	}
+
+	if (!forgeUniversalJar) {
+		throw new Error("Couldn't find the universal Forge jar in the installation jar.");
+	}
 
 	/**
 	 * Move the universal jar into the dist folder.
 	 */
-	log("Moving the Forge jar...");
-	fs.renameSync(
-		upath.join(tempDirectory, "forge", forgeUniversalPath),
-		upath.join(serverDestDirectory, forgeUniversalPath),
-	);
+	log("Extracting the Forge jar...");
+	await fs.promises.writeFile(upath.join(serverDestDirectory, forgeUniversalPath), forgeUniversalJar);
 
 	/**
 	 * Save the universal jar file name for later.
