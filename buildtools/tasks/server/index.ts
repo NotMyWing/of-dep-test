@@ -1,25 +1,23 @@
 import upath from "upath";
 import unzip from "unzipper";
 import through from "through2";
-import request from "requestretry";
 import mustache from "mustache";
 import log from "fancy-log";
 import gulp, { src, dest } from "gulp";
 import fs from "fs";
 import buildConfig from "../../buildConfig";
 import Bluebird from "bluebird";
-import { VersionsManifest } from "../../types/versionsManifest";
 import { ForgeProfile } from "../../types/forgeProfile";
 import { FileDef } from "../../types/fileDef";
 import { fetchFileInfo } from "../../util/curseForgeAPI";
-import { downloadOrRetrieveFileDef, libraryToPath, RetrievedFileDefReason } from "../../util/util";
+import { downloadOrRetrieveFileDef, getVersionManifest, libraryToPath, RetrievedFileDefReason } from "../../util/util";
 import { modpackManifest, overridesFolder, serverDestDirectory, sharedDestDirectory } from "../../globals";
 import del from "del";
+import { VersionManifest } from "../../types/versionManifest";
 
 const MOJANG_MAVEN = "https://libraries.minecraft.net/";
 const FORGE_VERSION_REG = /forge-(.+)/;
 const FORGE_MAVEN = "https://files.minecraftforge.net/maven/";
-const LAUNCHERMETA_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
 let g_forgeJar;
 
@@ -152,34 +150,9 @@ async function downloadForge() {
  */
 async function downloadMinecraftServer() {
 	log("Fetching the Minecraft version manifest...");
-
-	/**
-	 * Fetch the manifest file of all Minecraft versions.
-	 */
-	const manifest: VersionsManifest = await request({
-		uri: LAUNCHERMETA_VERSION_MANIFEST,
-		json: true,
-		fullResponse: false,
-		maxAttempts: 5,
-	});
-
-	/**
-	 * Find the version defined in manifest.json.
-	 */
-	const version = manifest.versions.find((x) => x.id == modpackManifest.minecraft.version);
-	if (!version) {
-		throw new Error(`Couldn't find ${modpackManifest.minecraft.version} in the version manifest.`);
-	}
-
-	log(`Fetching the manifest file for Minecraft ${version.id}...`);
-
-	/**
-	 * Fetch the version manifest file.
-	 */
-	const versionManifest = await request({ uri: version.url, json: true, fullResponse: false, maxAttempts: 5 });
-
-	if (!(versionManifest.downloads && versionManifest.downloads.server)) {
-		throw new Error(`No server jar file found for ${version.id}`);
+	const versionManifest: VersionManifest = await getVersionManifest(modpackManifest.minecraft.version);
+	if (!versionManifest) {
+		throw new Error(`No manifest found for Minecraft ${versionManifest.id}`);
 	}
 
 	/**
@@ -194,7 +167,14 @@ async function downloadMinecraftServer() {
 		})
 	).contents;
 
-	return fs.promises.writeFile(upath.join(serverDestDirectory, `minecraft_server.${version.id}.jar`), serverJar);
+	if (!(versionManifest.downloads && versionManifest.downloads.server)) {
+		throw new Error(`No server jar file found for ${versionManifest.id}`);
+	}
+
+	return fs.promises.writeFile(
+		upath.join(serverDestDirectory, `minecraft_server.${versionManifest.id}.jar`),
+		serverJar,
+	);
 }
 
 /**

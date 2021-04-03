@@ -10,6 +10,9 @@ import { execSync } from "child_process";
 import { ModpackManifest, ModpackManifestFile, ExternalDependency } from "../types/modpackManifest";
 import { fetchProject, fetchProjectsBulk } from "./curseForgeAPI";
 import Bluebird from "bluebird";
+import { VersionManifest } from "../types/versionManifest";
+import { VersionsManifest } from "../types/versionsManifest";
+import request from "requestretry";
 
 const LIBRARY_REG = /^(.+?):(.+?):(.+?)$/;
 
@@ -287,4 +290,35 @@ export async function compareAndExpandManifestDependencies(
 		modified: modified,
 		added: added,
 	};
+}
+
+const LAUNCHERMETA_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
+
+export async function getVersionManifest(minecraftVersion: string): Promise<VersionManifest> {
+	/**
+	 * Fetch the manifest file of all Minecraft versions.
+	 */
+	const manifest: VersionsManifest = await request({
+		uri: LAUNCHERMETA_VERSION_MANIFEST,
+		json: true,
+		fullResponse: false,
+		maxAttempts: 5,
+	});
+
+	const version = manifest.versions.find((x) => x.id == minecraftVersion);
+	if (!version) {
+		return null;
+	}
+
+	/**
+	 * Fetch the version manifest file.
+	 */
+	const versionManifest: VersionManifest = await request({
+		uri: version.url,
+		json: true,
+		fullResponse: false,
+		maxAttempts: 5,
+	});
+
+	return versionManifest;
 }
